@@ -1,0 +1,12 @@
+.env
+grading_rubric.pdf
+slides_copy_w4.pdf
+instructions.pdf
+lecture_summary_w4.md
+
+__pycache__/
+*.pyc
+.venv/
+audit_log.json
+provenance.db
+.DS_Store
