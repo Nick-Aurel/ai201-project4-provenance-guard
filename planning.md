@@ -1,6 +1,6 @@
 # Provenance Guard — Project Planning
 
-> **Status:** Milestone 6 complete — README documentation written; portfolio walkthrough ready to record.
+> **Status:** Milestone 6 complete + all 4 stretch features implemented.
 
 ## Problem Statement
 
@@ -570,6 +570,74 @@ Use `planning.md` sections + architecture diagram as context when prompting AI t
 
 ---
 
+---
+
+## Stretch Features
+
+Updated before implementation of each stretch feature per project instructions.
+
+### Stretch 1: Ensemble Detection
+
+**Signal 3 — Phrase Pattern Fingerprint** (`signals/phrase_patterns.py`):
+
+| Aspect | Detail |
+|---|---|
+| **Measures** | Density of AI transition phrases and uniformity of sentence starters |
+| **Output** | `phrase_score` float 0.0–1.0 |
+| **Blind spots** | Formal human writers using academic transitions |
+
+**Ensemble weights:**
+
+```
+confidence = (0.5 × llm_score) + (0.3 × stylometric_score) + (0.2 × phrase_score)
+```
+
+**Conflict resolution:** If `max(scores) - min(scores) > 0.30` or cross-conflict (LLM human + structure/lexicon AI), cap at `uncertain` unless `confidence ≤ 0.30`.
+
+### Stretch 2: Provenance Certificate
+
+Creators complete verification via `POST /verify`:
+
+1. Submit `attestation` (≥ 50 chars) — legal-style statement of human authorship
+2. Submit `writing_sample` (≥ 30 words) — original prose sample
+3. Record stored in `creators` SQLite table with `verified_at` timestamp
+
+When a verified creator's submission is classified `likely_human`, the response appends a **certificate badge** distinguishable from the standard transparency label:
+
+> [Verified Human Creator] — This creator completed a writing attestation and passed multi-signal review. This badge is separate from the standard transparency label above.
+
+Returned as separate `certificate_label` field alongside `label`.
+
+### Stretch 3: Analytics Dashboard
+
+`GET /analytics` returns JSON metrics; `GET /dashboard` renders HTML view.
+
+| Metric | Source |
+|---|---|
+| AI vs human vs uncertain ratio | Count `attribution` values in audit log |
+| Appeal rate | Entries with `appeal_reasoning` ÷ total |
+| Average confidence | Mean `confidence` across entries |
+| Under review count | Entries with `status: under_review` |
+
+### Stretch 4: Multi-Modal Support
+
+`POST /submit` accepts `content_type`:
+
+| Type | Field | Handling |
+|---|---|---|
+| `text` | `text` | Direct analysis |
+| `image_description` | `image_description` | Same 3-signal pipeline on description text |
+| `metadata` | `metadata` object | Concatenate title + caption + tags → analyze |
+
+`pipeline.py` normalizes all types to analyzable text before running the ensemble.
+
+### Stretch UI
+
+`GET /ui` — browser submission form for all content types.
+`GET /dashboard` — analytics dashboard.
+
+---
+
 ## Milestone 6 Checkpoint
 
 - [x] README covers architecture overview, detection signals, confidence scoring, transparency labels
@@ -579,6 +647,10 @@ Use `planning.md` sections + architecture diagram as context when prompting AI t
 - [x] Audit log sample with 3+ entries including one appeal
 - [x] Known limitations, spec reflection, and AI usage (3 instances)
 - [x] Portfolio walkthrough script included in README
+- [x] Stretch: ensemble detection (3 signals + weights)
+- [x] Stretch: provenance certificate (`POST /verify`)
+- [x] Stretch: analytics dashboard (`GET /dashboard`)
+- [x] Stretch: multi-modal support (`text`, `image_description`, `metadata`)
 - [ ] Portfolio walkthrough **video** — record and submit to course portal (student action)
 
 ---

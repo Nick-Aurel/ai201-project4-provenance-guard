@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Provenance Guard — Submit</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; }
+    label { display: block; font-weight: 600; margin-top: 1rem; }
+    input, select, textarea { width: 100%; padding: 0.5rem; margin-top: 0.25rem; box-sizing: border-box; }
+    button { margin-top: 1rem; padding: 0.6rem 1.2rem; background: #4a90d9; color: #fff; border: none; border-radius: 6px; cursor: pointer; }
+    pre { background: #f4f4f4; padding: 1rem; border-radius: 6px; overflow-x: auto; white-space: pre-wrap; }
+    .hidden { display: none; }
+    a { color: #4a90d9; }
+    .cert { color: #27ae60; font-weight: 600; margin-top: 0.5rem; }
+  </style>
+</head>
+<body>
+  <h1>Provenance Guard</h1>
+  <p>Submit creative content for attribution analysis. <a href="/dashboard">View analytics</a></p>
+
+  <form id="submit-form">
+    <label for="creator_id">Creator ID</label>
+    <input id="creator_id" name="creator_id" required placeholder="user-123">
+
+    <label for="content_type">Content Type</label>
+    <select id="content_type" name="content_type">
+      <option value="text">Text (poem, story, blog)</option>
+      <option value="image_description">Image Description</option>
+      <option value="metadata">Structured Metadata</option>
+    </select>
+
+    <div id="text-fields">
+      <label for="text">Text</label>
+      <textarea id="text" rows="8" placeholder="Paste your writing here..."></textarea>
+    </div>
+
+    <div id="image-fields" class="hidden">
+      <label for="image_description">Image Description</label>
+      <textarea id="image_description" rows="6" placeholder="Describe the artwork or photo..."></textarea>
+    </div>
+
+    <div id="metadata-fields" class="hidden">
+      <label for="meta_title">Title</label>
+      <input id="meta_title" placeholder="Sunset over the harbor">
+      <label for="meta_caption">Caption</label>
+      <textarea id="meta_caption" rows="3"></textarea>
+      <label for="meta_tags">Tags (comma-separated)</label>
+      <input id="meta_tags" placeholder="photography, sunset, ocean">
+    </div>
+
+    <button type="submit">Analyze</button>
+  </form>
+
+  <h2>Result</h2>
+  <pre id="result">Submit content to see attribution, confidence, and label.</pre>
+
+  <script>
+    const contentType = document.getElementById('content_type');
+    const textFields = document.getElementById('text-fields');
+    const imageFields = document.getElementById('image-fields');
+    const metadataFields = document.getElementById('metadata-fields');
+
+    contentType.addEventListener('change', () => {
+      textFields.classList.toggle('hidden', contentType.value !== 'text');
+      imageFields.classList.toggle('hidden', contentType.value !== 'image_description');
+      metadataFields.classList.toggle('hidden', contentType.value !== 'metadata');
+    });
+
+    document.getElementById('submit-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const type = contentType.value;
+      const body = {
+        creator_id: document.getElementById('creator_id').value.trim(),
+        content_type: type,
+      };
+
+      if (type === 'text') {
+        body.text = document.getElementById('text').value.trim();
+      } else if (type === 'image_description') {
+        body.image_description = document.getElementById('image_description').value.trim();
+      } else {
+        body.metadata = {
+          title: document.getElementById('meta_title').value.trim(),
+          caption: document.getElementById('meta_caption').value.trim(),
+          tags: document.getElementById('meta_tags').value.split(',').map(t => t.trim()).filter(Boolean),
+        };
+      }
+
+      const res = await fetch('/submit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      let output = JSON.stringify(data, null, 2);
+      if (data.certificate_label) {
+        output += '\n\n--- Verified Badge ---\n' + data.certificate_label;
+      }
+      document.getElementById('result').textContent = output;
+    });
+  </script>
+</body>
+</html>

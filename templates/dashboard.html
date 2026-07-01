@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Provenance Guard — Analytics</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1rem; color: #1a1a1a; }
+    h1 { margin-bottom: 0.25rem; }
+    .subtitle { color: #555; margin-bottom: 2rem; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; }
+    .card { border: 1px solid #ddd; border-radius: 8px; padding: 1rem; background: #fafafa; }
+    .card h2 { font-size: 0.9rem; text-transform: uppercase; color: #666; margin: 0 0 0.5rem; }
+    .card .value { font-size: 2rem; font-weight: 700; }
+    .bar-row { display: flex; align-items: center; gap: 0.5rem; margin: 0.4rem 0; }
+    .bar { height: 12px; border-radius: 4px; background: #4a90d9; }
+    .label-ai { color: #c0392b; }
+    .label-human { color: #27ae60; }
+    .label-uncertain { color: #e67e22; }
+    a { color: #4a90d9; }
+  </style>
+</head>
+<body>
+  <h1>Provenance Guard Analytics</h1>
+  <p class="subtitle">Detection patterns, appeal rate, and review queue metrics from the audit log.</p>
+  <p><a href="/ui">Submit content</a> · <a href="/">API index</a></p>
+
+  <div class="grid" id="metrics"></div>
+
+  <h2>Attribution Breakdown</h2>
+  <div id="breakdown"></div>
+
+  <script>
+    async function loadAnalytics() {
+      const res = await fetch('/analytics');
+      const data = await res.json();
+      const ratio = data.ai_vs_human_ratio;
+
+      document.getElementById('metrics').innerHTML = `
+        <div class="card">
+          <h2>Total Submissions</h2>
+          <div class="value">${data.total_submissions}</div>
+        </div>
+        <div class="card">
+          <h2>Appeal Rate</h2>
+          <div class="value">${data.appeal_rate_pct}%</div>
+          <small>${data.appeals_count} appeals</small>
+        </div>
+        <div class="card">
+          <h2>Avg Confidence</h2>
+          <div class="value">${data.average_confidence}</div>
+          <small>AI-likelihood score</small>
+        </div>
+        <div class="card">
+          <h2>Under Review</h2>
+          <div class="value">${data.under_review_count}</div>
+          <small>open appeals</small>
+        </div>
+      `;
+
+      const bd = data.attribution_breakdown;
+      const total = Math.max(data.total_submissions, 1);
+      document.getElementById('breakdown').innerHTML = `
+        <div class="bar-row label-ai">
+          <span style="width:110px">Likely AI</span>
+          <div class="bar" style="width:${(bd.likely_ai / total) * 100}%"></div>
+          <span>${bd.likely_ai} (${ratio.ai_pct}%)</span>
+        </div>
+        <div class="bar-row label-uncertain">
+          <span style="width:110px">Uncertain</span>
+          <div class="bar" style="width:${(bd.uncertain / total) * 100}%; background:#e67e22"></div>
+          <span>${bd.uncertain} (${ratio.uncertain_pct}%)</span>
+        </div>
+        <div class="bar-row label-human">
+          <span style="width:110px">Likely Human</span>
+          <div class="bar" style="width:${(bd.likely_human / total) * 100}%; background:#27ae60"></div>
+          <span>${bd.likely_human} (${ratio.human_pct}%)</span>
+        </div>
+      `;
+    }
+    loadAnalytics();
+  </script>
+</body>
+</html>

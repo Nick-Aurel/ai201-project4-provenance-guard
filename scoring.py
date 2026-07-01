@@ -1,4 +1,7 @@
-from signals.stylometrics import LLM_WEIGHT, STYLO_WEIGHT
+# Ensemble weights (3 signals)
+LLM_WEIGHT = 0.50
+STYLO_WEIGHT = 0.30
+PHRASE_WEIGHT = 0.20
 
 LABELS = {
     "likely_ai": (
@@ -17,15 +20,28 @@ LABELS = {
     ),
 }
 
+CERTIFICATE_LABEL = (
+    "[Verified Human Creator] — This creator completed a writing attestation and passed "
+    "multi-signal review. This badge is separate from the standard transparency label above."
+)
+
 SIGNAL_DISAGREEMENT_THRESHOLD = 0.30
 AI_LIKELIHOOD_AI_THRESHOLD = 0.75
 AI_LIKELIHOOD_HUMAN_THRESHOLD = 0.39
 DISAGREEMENT_HUMAN_OVERRIDE = 0.30
 
 
-def combine_scores(llm_score: float, stylometric_score: float) -> float:
-    """Combine both signals into a single ai_likelihood score."""
-    score = (LLM_WEIGHT * llm_score) + (STYLO_WEIGHT * stylometric_score)
+def combine_scores(
+    llm_score: float,
+    stylometric_score: float,
+    phrase_score: float,
+) -> float:
+    """Weighted ensemble of three detection signals."""
+    score = (
+        (LLM_WEIGHT * llm_score)
+        + (STYLO_WEIGHT * stylometric_score)
+        + (PHRASE_WEIGHT * phrase_score)
+    )
     return round(max(0.0, min(1.0, score)), 3)
 
 
@@ -33,16 +49,20 @@ def determine_attribution(
     ai_likelihood: float,
     llm_score: float,
     stylometric_score: float,
+    phrase_score: float,
 ) -> str:
-    """Map combined score and signal agreement to an attribution category."""
-    signals_disagree = abs(llm_score - stylometric_score) > SIGNAL_DISAGREEMENT_THRESHOLD
+    """Map ensemble score and signal agreement to an attribution category."""
+    scores = [llm_score, stylometric_score, phrase_score]
+    signal_spread = max(scores) - min(scores)
+
     cross_signal_conflict = (
-        llm_score <= 0.35 and stylometric_score >= 0.50
-    ) or (
-        llm_score >= 0.70 and stylometric_score <= 0.40
+        (llm_score <= 0.35 and max(stylometric_score, phrase_score) >= 0.50)
+        or (llm_score >= 0.70 and min(stylometric_score, phrase_score) <= 0.40)
     )
 
-    if (signals_disagree or cross_signal_conflict) and ai_likelihood > DISAGREEMENT_HUMAN_OVERRIDE:
+    if (
+        signal_spread > SIGNAL_DISAGREEMENT_THRESHOLD or cross_signal_conflict
+    ) and ai_likelihood > DISAGREEMENT_HUMAN_OVERRIDE:
         return "uncertain"
 
     if ai_likelihood <= AI_LIKELIHOOD_HUMAN_THRESHOLD:
@@ -57,3 +77,8 @@ def determine_attribution(
 def generate_label(attribution: str) -> str:
     """Map attribution category to transparency label text."""
     return LABELS.get(attribution, LABELS["uncertain"])
+
+
+def generate_verified_label() -> str:
+    """Return the provenance certificate badge text."""
+    return CERTIFICATE_LABEL

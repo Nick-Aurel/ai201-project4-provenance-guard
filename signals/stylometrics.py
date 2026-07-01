@@ -4,8 +4,6 @@ from typing import List
 
 PUNCTUATION = set(string.punctuation)
 
-LLM_WEIGHT = 0.6
-STYLO_WEIGHT = 0.4
 SHORT_TEXT_WORD_LIMIT = 30
 
 

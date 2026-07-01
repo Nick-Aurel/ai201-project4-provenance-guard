@@ -2,15 +2,22 @@ import os
 import uuid
 
 from dotenv import load_dotenv
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, render_template, request
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 
+from analytics import compute_analytics
 from audit_log import append_entry, get_log, update_entry_for_appeal
-from scoring import combine_scores, determine_attribution, generate_label
-from signals.llm_classifier import classify_with_llm
-from signals.stylometrics import compute_stylometric_score
-from store import get_submission, init_db, save_submission, update_submission_appeal
+from pipeline import classify_submission
+from store import (
+    MIN_ATTESTATION_LENGTH,
+    MIN_WRITING_SAMPLE_WORDS,
+    get_submission,
+    init_db,
+    save_submission,
+    update_submission_appeal,
+    verify_creator,
+)
 
 load_dotenv()
 
@@ -25,6 +32,11 @@ limiter = Limiter(
 )
 
 MIN_APPEAL_REASONING_LENGTH = 10
+SUPPORTED_CONTENT_TYPES = {"text", "image_description", "metadata"}
+
+
+def _word_count(text: str) -> int:
+    return len(text.split())
 
 
 @app.route("/")
@@ -33,9 +45,13 @@ def index():
         {
             "service": "Provenance Guard",
             "endpoints": {
-                "POST /submit": "Submit text for attribution analysis",
+                "POST /submit": "Submit text, image description, or metadata for analysis",
                 "POST /appeal": "Contest a classification",
+                "POST /verify": "Complete creator verification for provenance certificate",
                 "GET /log": "View audit log entries",
+                "GET /analytics": "JSON analytics metrics",
+                "GET /dashboard": "Analytics dashboard view",
+                "GET /ui": "Simple submission interface",
             },
         }
     )
@@ -45,40 +61,58 @@ def index():
 @limiter.limit("10 per minute;100 per day")
 def submit():
     data = request.get_json(silent=True) or {}
-    text = data.get("text", "").strip()
     creator_id = data.get("creator_id", "").strip()
+    content_type = data.get("content_type", "text").strip().lower() or "text"
 
-    if not text or not creator_id:
-        return jsonify({"error": "Both 'text' and 'creator_id' are required."}), 400
+    if not creator_id:
+        return jsonify({"error": "'creator_id' is required."}), 400
+
+    if content_type not in SUPPORTED_CONTENT_TYPES:
+        return jsonify(
+            {
+                "error": (
+                    f"Unsupported content_type '{content_type}'. "
+                    f"Use one of: {', '.join(sorted(SUPPORTED_CONTENT_TYPES))}."
+                )
+            }
+        ), 400
+
+    result, error = classify_submission(content_type, data, creator_id)
+    if error:
+        return jsonify({"error": error}), 400
 
     content_id = str(uuid.uuid4())
-    llm_score = classify_with_llm(text)
-    stylometric_score = compute_stylometric_score(text)
-    confidence = combine_scores(llm_score, stylometric_score)
-    attribution = determine_attribution(confidence, llm_score, stylometric_score)
-    label = generate_label(attribution)
+    analysis_text = result["analysis_text"]
 
     save_submission(
         content_id=content_id,
         creator_id=creator_id,
-        text=text,
-        attribution=attribution,
-        confidence=confidence,
-        label=label,
-        llm_score=llm_score,
-        stylometric_score=stylometric_score,
+        text=analysis_text[:2000],
+        content_type=content_type,
+        attribution=result["attribution"],
+        confidence=result["confidence"],
+        label=result["label"],
+        llm_score=result["llm_score"],
+        stylometric_score=result["stylometric_score"],
+        phrase_score=result["phrase_score"],
+        verified=result["verified"],
+        certificate_label=result["certificate_label"],
     )
 
     append_entry(
         {
             "content_id": content_id,
             "creator_id": creator_id,
-            "text": text[:500],
-            "attribution": attribution,
-            "confidence": confidence,
-            "llm_score": llm_score,
-            "stylometric_score": stylometric_score,
-            "label": label,
+            "content_type": content_type,
+            "text": analysis_text[:500],
+            "attribution": result["attribution"],
+            "confidence": result["confidence"],
+            "llm_score": result["llm_score"],
+            "stylometric_score": result["stylometric_score"],
+            "phrase_score": result["phrase_score"],
+            "label": result["label"],
+            "verified": result["verified"],
+            "certificate_label": result["certificate_label"],
             "status": "classified",
         }
     )
@@ -86,12 +120,59 @@ def submit():
     return jsonify(
         {
             "content_id": content_id,
-            "attribution": attribution,
-            "confidence": confidence,
-            "label": label,
-            "llm_score": llm_score,
-            "stylometric_score": stylometric_score,
+            "content_type": content_type,
+            "attribution": result["attribution"],
+            "confidence": result["confidence"],
+            "label": result["label"],
+            "llm_score": result["llm_score"],
+            "stylometric_score": result["stylometric_score"],
+            "phrase_score": result["phrase_score"],
+            "verified": result["verified"],
+            "certificate_label": result["certificate_label"],
             "status": "classified",
+        }
+    )
+
+
+@app.route("/verify", methods=["POST"])
+def verify():
+    data = request.get_json(silent=True) or {}
+    creator_id = data.get("creator_id", "").strip()
+    attestation = data.get("attestation", "").strip()
+    writing_sample = data.get("writing_sample", "").strip()
+
+    if not creator_id or not attestation or not writing_sample:
+        return jsonify(
+            {"error": "'creator_id', 'attestation', and 'writing_sample' are required."}
+        ), 400
+
+    if len(attestation) < MIN_ATTESTATION_LENGTH:
+        return jsonify(
+            {
+                "error": (
+                    f"'attestation' must be at least {MIN_ATTESTATION_LENGTH} characters."
+                )
+            }
+        ), 400
+
+    if _word_count(writing_sample) < MIN_WRITING_SAMPLE_WORDS:
+        return jsonify(
+            {
+                "error": (
+                    f"'writing_sample' must be at least "
+                    f"{MIN_WRITING_SAMPLE_WORDS} words."
+                )
+            }
+        ), 400
+
+    record = verify_creator(creator_id, attestation, writing_sample)
+    return jsonify(
+        {
+            **record,
+            "message": (
+                "Verification complete. Future human-classified submissions will "
+                "display the verified human creator badge."
+            ),
         }
     )
 
@@ -131,11 +212,13 @@ def appeal():
             {
                 "content_id": content_id,
                 "creator_id": submission["creator_id"],
+                "content_type": submission.get("content_type", "text"),
                 "text": submission["text"][:500],
                 "attribution": submission["attribution"],
                 "confidence": submission["confidence"],
                 "llm_score": submission["llm_score"],
                 "stylometric_score": submission["stylometric_score"],
+                "phrase_score": submission.get("phrase_score"),
                 "label": submission["label"],
                 "status": "under_review",
                 "appeal_reasoning": creator_reasoning,
@@ -154,6 +237,21 @@ def appeal():
 @app.route("/log", methods=["GET"])
 def log():
     return jsonify({"entries": get_log()})
+
+
+@app.route("/analytics", methods=["GET"])
+def analytics():
+    return jsonify(compute_analytics())
+
+
+@app.route("/dashboard", methods=["GET"])
+def dashboard():
+    return render_template("dashboard.html")
+
+
+@app.route("/ui", methods=["GET"])
+def ui():
+    return render_template("submit.html")
 
 
 if __name__ == "__main__":

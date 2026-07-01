@@ -1,6 +1,6 @@
 # Provenance Guard
 
-A Flask backend that classifies whether submitted creative text is likely human-written or AI-generated. It combines two independent detection signals, returns a confidence score with plain-language transparency labels, logs every decision for accountability, and lets creators appeal misclassifications.
+A Flask backend that classifies whether submitted creative text is likely human-written or AI-generated. It combines three independent detection signals in an ensemble, returns a confidence score with plain-language transparency labels, logs every decision for accountability, and lets creators appeal misclassifications.
 
 ## Quick Start
 
@@ -28,9 +28,13 @@ Server starts at `http://127.0.0.1:5001` (port 5001 avoids a conflict with macOS
 
 | Method | Path | Purpose |
 |---|---|---|
-| `POST` | `/submit` | Submit text for attribution analysis |
+| `POST` | `/submit` | Submit text, image description, or metadata for analysis |
 | `POST` | `/appeal` | Contest a classification |
+| `POST` | `/verify` | Complete creator verification for provenance certificate |
 | `GET` | `/log` | View structured audit log entries |
+| `GET` | `/analytics` | JSON analytics metrics |
+| `GET` | `/dashboard` | Analytics dashboard (HTML) |
+| `GET` | `/ui` | Simple submission interface (HTML) |
 
 **Submit example:**
 
@@ -58,11 +62,12 @@ A submission follows this path from input to transparency label:
 2. **Validation** — `POST /submit` requires `text` and `creator_id`; assigns a UUID `content_id`.
 3. **Signal 1 (LLM)** — Groq `llama-3.3-70b-versatile` returns an `ai_likelihood` score (0 = human, 1 = AI).
 4. **Signal 2 (Stylometrics)** — Pure Python computes sentence-length std dev, type-token ratio, and punctuation density.
-5. **Confidence scorer** — Weighted blend: `0.6 × llm_score + 0.4 × stylometric_score`.
-6. **Attribution** — Maps combined score to `likely_ai`, `uncertain`, or `likely_human` with signal-disagreement rules.
-7. **Label generator** — Maps attribution to plain-language transparency text.
-8. **Storage** — SQLite persists the submission; JSON audit log records the decision.
-9. **Response** — JSON returned with `content_id`, scores, attribution, confidence, and label.
+5. **Signal 3 (Phrase Patterns)** — Detects AI transition phrases and uniform sentence starters.
+6. **Ensemble scorer** — Weighted blend: `0.5 × llm + 0.3 × stylometric + 0.2 × phrase`.
+7. **Attribution** — Maps combined score to `likely_ai`, `uncertain`, or `likely_human` with signal-disagreement rules.
+8. **Label generator** — Maps attribution to plain-language transparency text; verified creators get a certificate badge on human-classified work.
+9. **Storage** — SQLite persists the submission; JSON audit log records the decision.
+10. **Response** — JSON returned with `content_id`, all signal scores, attribution, confidence, and label.
 
 **Appeal flow:** `POST /appeal` looks up the submission by `content_id`, sets status to `under_review`, and updates the audit log with `appeal_reasoning` while preserving the original classification.
 
@@ -78,11 +83,15 @@ POST /appeal → lookup content_id → update status → log appeal → confirma
 | File | Role |
 |---|---|
 | `app.py` | Flask routes, rate limiting, request handling |
+| `pipeline.py` | Multi-modal input normalization and detection orchestration |
 | `signals/llm_classifier.py` | Groq LLM authorship classifier |
 | `signals/stylometrics.py` | Structural text heuristics |
-| `scoring.py` | Score combination, attribution, label generation |
-| `store.py` | SQLite submission persistence |
+| `signals/phrase_patterns.py` | Lexical AI phrase fingerprint (ensemble signal 3) |
+| `scoring.py` | Ensemble combination, attribution, label + certificate generation |
+| `analytics.py` | Audit-log metrics for dashboard |
+| `store.py` | SQLite submission + creator verification persistence |
 | `audit_log.py` | Append-only JSON audit log |
+| `templates/` | Dashboard and submission UI |
 | `planning.md` | Pre-implementation spec and architecture |
 
 ---
@@ -107,16 +116,25 @@ POST /appeal → lookup content_id → update status → log appeal → confirma
 | **Why chosen** | Independent structural signal — no API cost, fast, catches uniformity the LLM may miss |
 | **Blind spots** | Cannot read meaning; repetitive poetry scores AI-like; formal essays with varied vocabulary score human-like on TTR |
 
-These signals are genuinely independent (semantic vs. structural). When they disagree, the system leans toward `uncertain` rather than forcing a strong AI label — protecting human creators from false positives.
+### Signal 3: Phrase Pattern Fingerprint (Python)
+
+| | |
+|---|---|
+| **Measures** | Density of common AI transition phrases ("Furthermore," "It is important to note") and uniformity of sentence starters |
+| **Output** | `phrase_score` float 0.0–1.0 (0 = human-like diction, 1 = AI-like boilerplate) |
+| **Why chosen** | Lexical signal independent of semantics and statistics — catches template phrasing both other signals can miss |
+| **Blind spots** | Formal human writers who use transition words; creative writing with intentional repetition |
+
+These signals are genuinely independent (semantic vs. structural vs. lexical). When they disagree, the system leans toward `uncertain` rather than forcing a strong AI label — protecting human creators from false positives.
 
 ---
 
 ## Confidence Scoring
 
-The `confidence` field is the combined **AI-likelihood** score:
+The `confidence` field is the ensemble **AI-likelihood** score:
 
 ```
-confidence = (0.6 × llm_score) + (0.4 × stylometric_score)
+confidence = (0.5 × llm_score) + (0.3 × stylometric_score) + (0.2 × phrase_score)
 ```
 
 | Score range | Attribution | Meaning |
@@ -125,7 +143,7 @@ confidence = (0.6 × llm_score) + (0.4 × stylometric_score)
 | 0.40 – 0.74 | `uncertain` | Genuinely ambiguous |
 | ≤ 0.39 | `likely_human` | Strong evidence of human authorship |
 
-**Signal disagreement rule:** If signals differ by more than 0.30, or one says human while the other says AI (cross-conflict), attribution is capped at `uncertain` unless the combined score is very low (≤ 0.30).
+**Signal disagreement rule:** If any two signals differ by more than 0.30 (max − min spread), or a cross-conflict occurs (LLM says human while structure/lexicon say AI), attribution is capped at `uncertain` unless the combined score is very low (≤ 0.30).
 
 ### Validation
 
@@ -288,6 +306,103 @@ The system updates status to `under_review`, logs the appeal alongside the origi
 
 ---
 
+## Stretch Features
+
+### Ensemble Detection (+1 pt)
+
+Three distinct signals feed a documented weighted ensemble:
+
+| Signal | Weight | Conflict handling |
+|---|---|---|
+| LLM classifier | 0.50 | Primary semantic judgment |
+| Stylometrics | 0.30 | Structural corroboration |
+| Phrase patterns | 0.20 | Lexical boilerplate detection |
+
+When signals conflict (spread > 0.30 or cross-conflict), attribution is capped at `uncertain` before threshold mapping. Every `/submit` response includes `llm_score`, `stylometric_score`, and `phrase_score` alongside the ensemble `confidence`.
+
+### Provenance Certificate (+1 pt)
+
+Verified creators earn a distinguishable badge on human-classified submissions.
+
+**Verification step** (`POST /verify`):
+
+```bash
+curl -s -X POST http://127.0.0.1:5001/verify \
+  -H "Content-Type: application/json" \
+  -d '{
+    "creator_id": "user-123",
+    "attestation": "I attest that I am the human author of the writing samples I submit to this platform and understand that false claims may result in account review.",
+    "writing_sample": "I wrote this sample myself to verify my identity as a human creator on this platform. It reflects my natural voice and was not generated by AI tools."
+  }'
+```
+
+Requirements: attestation ≥ 50 characters, writing sample ≥ 30 words.
+
+**Certificate label** (appended only when creator is verified AND attribution is `likely_human`):
+
+> [Verified Human Creator] — This creator completed a writing attestation and passed multi-signal review. This badge is separate from the standard transparency label above.
+
+The response includes both `label` (standard transparency text) and `certificate_label` (badge) as separate fields.
+
+### Analytics Dashboard (+1 pt)
+
+`GET /dashboard` renders an HTML view with four metrics from the audit log:
+
+| Metric | Description |
+|---|---|
+| **Detection pattern** | Ratio of `likely_ai` vs `likely_human` vs `uncertain` verdicts |
+| **Appeal rate** | Percentage of submissions with appeals filed |
+| **Average confidence** | Mean AI-likelihood score across all submissions |
+| **Under review count** | Open appeals awaiting human review |
+
+JSON equivalent: `GET /analytics`
+
+### Multi-Modal Support (+1 pt)
+
+`POST /submit` accepts a `content_type` field:
+
+| Type | Input field | Pipeline |
+|---|---|---|
+| `text` (default) | `text` | All 3 signals on body text |
+| `image_description` | `image_description` | All 3 signals on alt-text / description |
+| `metadata` | `metadata` object (`title`, `caption`, `tags`) | Concatenated fields analyzed by same ensemble |
+
+**Image description example:**
+
+```bash
+curl -s -X POST http://127.0.0.1:5001/submit \
+  -H "Content-Type: application/json" \
+  -d '{
+    "creator_id": "artist-1",
+    "content_type": "image_description",
+    "image_description": "A watercolor painting of a harbor at dusk with fishing boats and orange reflections on the water."
+  }'
+```
+
+**Metadata example:**
+
+```bash
+curl -s -X POST http://127.0.0.1:5001/submit \
+  -H "Content-Type: application/json" \
+  -d '{
+    "creator_id": "artist-1",
+    "content_type": "metadata",
+    "metadata": {
+      "title": "Harbor at Dusk",
+      "caption": "Original watercolor from my plein air session last weekend.",
+      "tags": ["watercolor", "harbor", "original art"]
+    }
+  }'
+```
+
+For metadata, title + caption + tags are concatenated into analyzable text. The same three signals apply — LLM reads semantic coherence, stylometrics measure caption structure, phrase patterns catch generic AI tag phrasing.
+
+### Submission UI
+
+`GET /ui` provides a browser interface for submitting all three content types and viewing results including the verified badge.
+
+---
+
 ## Known Limitations
 
 **Formal academic human writing** is the case our system handles poorest. Scholarly prose uses consistent sentence structure, field-specific vocabulary, and hedging language ("extensively studied," "fundamental tension") that mirrors AI patterns. Both signals lean AI-ish — the LLM scores polished prose high, and stylometrics see uniform sentence lengths. These submissions land in the `uncertain` band rather than `likely_human`, which is conservative but may frustrate academic authors. The appeals path exists for exactly this scenario.
@@ -342,6 +457,7 @@ Record a 2–3 minute screen recording following this script:
 4. **Audit log (20 sec)** — `curl GET /log`. Point out both signal scores, timestamp, and structured JSON.
 5. **Appeal (20 sec)** — `curl POST /appeal` with a `content_id`. Show status changing to `under_review` in the log with `appeal_reasoning`.
 6. **Rate limit (15 sec)** — Show the 429 output from rapid-fire requests.
-7. **Design decisions (20 sec)** — Mention two-signal pipeline, asymmetric thresholds, and appeals path.
+7. **Stretch features (30 sec)** — Open `/dashboard` for analytics, `/ui` for submission UI, demo `POST /verify` + human submit showing certificate badge, and an `image_description` submit.
+8. **Design decisions (20 sec)** — Mention three-signal ensemble, asymmetric thresholds, and appeals path.
 
 Upload the recording to the course portal alongside this repo link.
