@@ -50,7 +50,7 @@ When a creator submits a piece of text, here is the path it takes from input to 
 
 ## Detection Signals
 
-We use two genuinely independent signals: one semantic (LLM), one structural (stylometrics). They capture different properties of text, so disagreement between them is informative rather than redundant.
+We use three independent signals: semantic (LLM), structural (stylometrics), and lexical (phrase patterns).
 
 ### Signal 1: LLM Classifier (Groq — `llama-3.3-70b-versatile`)
 
@@ -70,24 +70,34 @@ We use two genuinely independent signals: one semantic (LLM), one structural (st
 | **Why human vs. AI differs** | AI text tends toward uniform sentence lengths, repetitive vocabulary, and low punctuation variation. Human writing — especially informal — is more lexically diverse and rhythmically irregular. |
 | **Blind spots** | Cannot read meaning. A poem with intentional repetition and simple vocabulary may score AI-like. Technical writing with consistent structure may score AI-like despite being human. Highly variable AI output (if prompted for informality) can fool heuristics. |
 
+### Signal 3: Phrase Pattern Fingerprint (Pure Python)
+
+| Aspect | Detail |
+|---|---|
+| **What it measures** | Density of AI transition phrases and uniformity of sentence starters |
+| **Output** | A float `phrase_score` from 0.0 to 1.0 (0 = human-like diction, 1 = AI boilerplate) |
+| **Why human vs. AI differs** | AI text overuses template transitions ("Furthermore," "It is important to note") and starts sentences uniformly |
+| **Blind spots** | Formal human writers who use academic transition words |
+
 ### Why this pairing
 
-From the Week 4 lecture: one signal is semantic, one is structural. Weaknesses in one are partially covered by the other. When they agree, confidence is high. When they disagree, the system should land in the "uncertain" band rather than force a strong label — protecting human creators from false positives.
+From the Week 4 lecture: signals should capture different properties (semantic, structural, lexical). Weaknesses in one are partially covered by others. When they disagree, the system lands in the "uncertain" band rather than force a strong label.
 
 ### Signal combination (implementation spec)
 
-Both signals output a float from **0.0 (human-like) to 1.0 (AI-like)**. They are combined into a single `ai_likelihood` score:
+All three signals output a float from **0.0 (human-like) to 1.0 (AI-like)**. They are combined into a single `confidence` score:
 
 ```
-ai_likelihood = (0.6 × llm_score) + (0.4 × stylometric_score)
+confidence = (0.5 × llm_score) + (0.3 × stylometric_score) + (0.2 × phrase_score)
 ```
 
 | Weight | Rationale |
 |---|---|
-| LLM 60% | Reads meaning and context; primary semantic judgment |
-| Stylometrics 40% | Structural corroboration; catches uniformity the LLM might miss |
+| LLM 50% | Primary semantic judgment |
+| Stylometrics 30% | Structural corroboration |
+| Phrase patterns 20% | Lexical boilerplate detection |
 
-**Signal disagreement rule:** If `abs(llm_score - stylometric_score) > 0.30`, cap the final attribution at `uncertain` regardless of `ai_likelihood` — unless `ai_likelihood <= 0.30` (both signals still agree it's human). This prevents a single over-confident signal from forcing a strong AI label when the other disagrees.
+**Signal disagreement rule:** If `max(scores) - min(scores) > 0.30`, or cross-conflict occurs (LLM ≤ 0.35 and structure/lexicon ≥ 0.50, or the reverse), cap attribution at `uncertain` unless `confidence ≤ 0.30`.
 
 #### Stylometric sub-metrics (Signal 2 internals)
 
